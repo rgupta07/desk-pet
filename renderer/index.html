@@ -1,0 +1,525 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>desk pet</title>
+<style>
+  :root {
+    --coral: #F3F1EC;
+    --blush: #FFFFFF;
+    --ink: #4A4A46;
+  }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    background: transparent;
+    overflow: hidden;
+    cursor: default;
+    -webkit-user-select: none; user-select: none;
+    -webkit-app-region: no-drag;
+  }
+
+  #pet {
+    position: absolute;
+    left: 0; top: 0;
+    width: 92px; height: 92px;
+    margin-left: -46px; margin-top: -46px;
+    will-change: transform;
+    cursor: grab;
+  }
+  #pet.dragging { cursor: grabbing; }
+  #body { display: block; overflow: visible; transform-origin: 50% 60%; will-change: transform, opacity; }
+  #ghostBody { transition: transform .5s cubic-bezier(.2,.8,.3,1); transform-origin: 50% 50%; }
+  body.asleep #ghostBody { transform: scale(.92); }
+  .eye { transform-origin: center; transition: transform .08s ease; }
+  body.blink .eye { transform: scaleY(.12); }
+  body.asleep .eye { transform: scaleY(.15); }
+  #mouth { transition: d .25s ease; }
+
+  #shadow {
+    position: absolute;
+    left: 0; top: 0;
+    width: 50px; height: 9px;
+    margin-left: -25px;
+    border-radius: 50%;
+    background: rgba(20,16,14,.16);
+    filter: blur(3px);
+    will-change: transform, opacity;
+  }
+
+  .treat {
+    position: absolute;
+    width: 17px; height: 17px;
+    margin-left: -8.5px; margin-top: -17px;
+    border-radius: 50% 50% 52% 48%;
+    background: radial-gradient(circle at 34% 30%, #9CC08F, #6E9469);
+    box-shadow: 0 2px 5px rgba(20,16,14,.28);
+    animation: drop .45s cubic-bezier(.3,1.5,.5,1);
+  }
+  @keyframes drop { from { transform: translateY(-160px) scale(.6); } }
+
+  .puff {
+    position: absolute;
+    font: 600 16px/1 ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+    color: #C4603A;
+    text-shadow: 0 1px 2px rgba(255,255,255,.5);
+    pointer-events: none;
+    animation: rise 1.6s ease-out forwards;
+  }
+  .puff.zzz { color: #5C6472; font-size: 14px; letter-spacing: 1px; }
+  @keyframes rise {
+    0%   { opacity: 0; transform: translate(0,0) scale(.6); }
+    18%  { opacity: 1; transform: translate(0,-16px) scale(1); }
+    100% { opacity: 0; transform: translate(8px,-70px) scale(.9); }
+  }
+</style>
+</head>
+<body>
+  <div id="shadow"></div>
+  <div id="pet">
+    <svg id="body" viewBox="0 0 100 100" width="92" height="92">
+      <path id="ghostBody" fill="var(--coral)"
+            d="M24 74 C24 34 24 6 50 6 C76 6 76 34 76 74
+               Q70.8 90 65.6 74 Q60.4 90 55.2 74 Q50 90 44.8 74
+               Q39.6 90 34.4 74 Q29.2 90 24 74 Z"/>
+      <ellipse cx="50" cy="30" rx="20" ry="19" fill="var(--blush)" opacity=".35"/>
+      <ellipse class="eye" id="eyeL" cx="42" cy="34" rx="3.6" ry="4.6" fill="var(--ink)"/>
+      <ellipse class="eye" id="eyeR" cx="58" cy="34" rx="3.6" ry="4.6" fill="var(--ink)"/>
+      <path id="mouth" d="M44 46 Q50 51 56 46" stroke="var(--ink)" stroke-width="2.4"
+            stroke-linecap="round" fill="none"/>
+      <ellipse cx="36" cy="43" rx="4.2" ry="2.7" fill="#fff" opacity=".28"/>
+      <ellipse cx="64" cy="43" rx="4.2" ry="2.7" fill="#fff" opacity=".28"/>
+    </svg>
+  </div>
+
+<script>
+(() => {
+  const petEl  = document.getElementById('pet');
+  const bodyEl = document.getElementById('body');
+  const shadow    = document.getElementById('shadow');
+  const ghostBody = document.getElementById('ghostBody');
+  const eyeL   = document.getElementById('eyeL');
+  const eyeR   = document.getElementById('eyeR');
+  const mouth  = document.getElementById('mouth');
+
+  const HIT     = 56;       // how close the cursor gets before clicks stick
+  const EDGE    = 46;       // half the pet's footprint, for screen-edge clamping
+  const HANG  = 64;         // resting distance below the top edge of the screen
+  const SLEEP_HANG = 118;   // droops a little lower while napping
+  const BOB_AMP = 7, BOB_SPEED = 42;
+
+  const P = {
+    x: window.innerWidth / 2,
+    targetX: window.innerWidth / 2,
+    y: 0,                    // spring offset below the hang baseline (positive = lower)
+    vx: 0, vy: 0,
+    dragY: 0,                // cursor y while dragging
+    hang: HANG,
+    rot: 0, squash: 0,
+    state: 'idle',
+    nextWander: 90,
+    face: 'neutral'
+  };
+
+  let treat = null, drag = null, idleTicks = 0, frame = 0;
+  let rainbowUntil = 0;                                                   // 0 = not currently active
+  let nextRainbowAt = performance.now() + 45000 + Math.random() * 45000;  // first one in ~45-90s
+  let hemShear = 0, hemShearVel = 0, prevX = P.x;
+  let hemFlare = 0, hemFlareVel = 0, prevCY = 0;
+  let spinFrames = 0;
+  let spinCooldown = (25 + Math.random() * 40) * 60;      // occasional lazy twirl
+  let phaseFrames = 0;
+  let phaseCooldown = (35 + Math.random() * 55) * 60;     // occasional translucent flicker
+  let booCooldown = (15 + Math.random() * 20) * 60;       // peekaboo when the cursor lingers nearby
+  let quirk = null;                                       // current cute action, if any
+  let quirkCooldown = (14 + Math.random() * 18) * 60;     // ~15-30s between quirks
+  let ignoring = true;
+  let nearTicks = 0;        // frames the cursor has lingered right on top of the pet
+  const mouse = { x: -9999, y: -9999, seen: false };
+
+  // Work areas of each monitor in window coordinates (the window spans them all).
+  // The floor is per-monitor: whichever screen the pet is over, it floats above
+  // that screen's bottom edge.
+  let zones = [{ x: 0, y: 0, width: window.innerWidth, height: window.innerHeight }];
+  window.pet.onDisplays((z) => { if (z && z.length) zones = z; });
+  const zoneAt = (x) => zones.find(z => x >= z.x && x <= z.x + z.width)
+    || zones.reduce((a, b) => Math.abs(a.x + a.width / 2 - x) <= Math.abs(b.x + b.width / 2 - x) ? a : b);
+  const floorY = (x = P.x) => { const z = zoneAt(x); return z.y + z.height - 8; };
+  const ceilY  = (x = P.x) => zoneAt(x).y + 8;
+  let floorCur = null, ceilCur = null;  // eased, so crossing between offset monitors glides
+  const bobOffset = () => P.state === 'sleep' ? Math.sin(frame / 70) * 3 : Math.sin(frame / BOB_SPEED) * BOB_AMP;
+  const hangDepth = () => P.hang + P.y + bobOffset();
+  const centerY = () => drag ? P.dragY : (ceilCur ?? ceilY()) + hangDepth() + 46;
+
+  /* --- animated cloth hem: 5 scallops that flutter and swing opposite the direction of travel,
+         like a skirt hanging from the rounded top — outer points swing more than the center,
+         and the swing has real spring lag so it overshoots/settles instead of snapping instantly --- */
+  const HEM_LEFT = 24, HEM_RIGHT = 76, HEM_TOP = 6, HEM_BODY_BOTTOM = 74, HEM_MID = 50;
+  const HEM_N = 5, HEM_STEP = (HEM_RIGHT - HEM_LEFT) / HEM_N;
+  const HEM_BUMP_X   = Array.from({ length: HEM_N }, (_, i) => HEM_RIGHT - HEM_STEP * (i + 0.5));
+  const HEM_VALLEY_X = Array.from({ length: HEM_N }, (_, i) => HEM_RIGHT - HEM_STEP * (i + 1));
+  const lever = (x) => (x - HEM_MID) / (HEM_RIGHT - HEM_MID);   // -1 (left edge) .. 1 (right edge)
+
+  function ghostPath(t, shear, flare) {
+    // shear shifts everything below the head sideways, more the lower it hangs
+    // (head anchored, hem trailing) — flare puffs the skirt out symmetrically
+    const sHem = shear * 0.55, sMid = shear * 0.18;
+    let d = `M${HEM_LEFT + sHem - flare} ${HEM_BODY_BOTTOM} `
+          + `C${HEM_LEFT + sMid - flare * .5} 34 ${HEM_LEFT} ${HEM_TOP} ${HEM_MID} ${HEM_TOP} `
+          + `C${HEM_RIGHT} ${HEM_TOP} ${HEM_RIGHT + sMid + flare * .5} 34 ${HEM_RIGHT + sHem + flare} ${HEM_BODY_BOTTOM} `;
+    for (let i = 0; i < HEM_N; i++) {
+      const bumpX   = HEM_BUMP_X[i]   + shear + flare * lever(HEM_BUMP_X[i]);
+      const valleyX = HEM_VALLEY_X[i] + sHem  + flare * lever(HEM_VALLEY_X[i]);
+      const wave = Math.sin(t * 0.05 + i * 1.1) * 6.5;
+      const bumpY = 91 + wave;
+      const valleyY = HEM_BODY_BOTTOM + Math.sin(t * 0.05 + i * 1.1 + 1.2) * 3;
+      d += `Q${bumpX} ${bumpY} ${valleyX} ${valleyY} `;
+    }
+    return d + 'Z';
+  }
+
+  function setIgnore(v) {
+    if (v === ignoring) return;
+    ignoring = v;
+    window.pet.setIgnoreMouse(v);
+  }
+
+  function setFace(f) {
+    if (P.face === f) return;
+    P.face = f;
+    if (f === 'happy')      mouth.setAttribute('d', 'M42 44 Q50 54 58 44');
+    else if (f === 'sleep') mouth.setAttribute('d', 'M46.5 47 Q50 50 53.5 47');
+    else                    mouth.setAttribute('d', 'M44 46 Q50 51 56 46');
+  }
+
+  function puff(text, cls) {
+    const el = document.createElement('div');
+    el.className = 'puff' + (cls ? ' ' + cls : '');
+    el.textContent = text;
+    el.style.left = (P.x - 6 + (Math.random() * 20 - 10)) + 'px';
+    el.style.top  = (centerY() - 34) + 'px';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1700);
+  }
+
+  function floatTo(tx) {
+    if (P.state === 'sleep') wake();
+    P.targetX = Math.max(EDGE, Math.min(window.innerWidth - EDGE, tx));
+  }
+
+  function wake() {
+    if (P.state !== 'sleep') return;
+    P.state = 'idle';
+    document.body.classList.remove('asleep');
+    setFace('neutral');
+    idleTicks = 0; P.nextWander = 25;
+    window.pet.reportState('idle');
+  }
+
+  function sleep() {
+    if (P.state === 'sleep') return;
+    P.state = 'sleep';
+    document.body.classList.add('asleep');
+    setFace('sleep');
+    window.pet.reportState('sleep');
+  }
+
+  function petIt() {
+    if (P.state === 'sleep') { wake(); puff('!'); return; }
+    P.squash = 0.24;
+    setFace('happy');
+    puff(Math.random() < 0.25 ? 'BOO!' : '♥');
+    P.vy = Math.max(P.vy, 3.5);
+    idleTicks = 0;
+    setTimeout(() => { if (P.face === 'happy') setFace('neutral'); }, 2600);
+  }
+
+  function dropTreat(x) {
+    endQuirk();
+    if (treat) treat.el.remove();
+    x = x !== undefined ? x : 80 + Math.random() * (window.innerWidth - 160);
+    const el = document.createElement('div');
+    el.className = 'treat';
+    el.style.left = x + 'px';
+    el.style.top  = floorY(x) + 'px';
+    document.body.appendChild(el);
+    treat = { el, x };
+    wake();
+  }
+
+  /* --- random cute actions ---
+     peek:    slips almost entirely off a screen edge, eyes peeking back in
+     hide:    rises above the top edge, then slooowly lowers back down face-first
+     wiggle:  quick happy shimmy
+     wink:    one-eyed wink
+     yawn:    little round yawn with a stretch
+     zoomies: darts back and forth for a few seconds */
+  function startQuirk() {
+    const types = ['peek', 'hide', 'wiggle', 'wink', 'yawn', 'zoomies'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    const total = { peek: 300, hide: 330, wiggle: 70, wink: 55, yawn: 95, zoomies: 170 }[type];
+    quirk = { type, frames: total, total, data: {} };
+    if (type === 'peek') {
+      const z = zoneAt(P.x);
+      quirk.data.side = (P.x - z.x < z.x + z.width - P.x) ? 'left' : 'right';
+      quirk.data.retX = Math.max(z.x + 130, Math.min(z.x + z.width - 130, P.x));
+    } else if (type === 'wink') {
+      eyeR.style.transform = 'scaleY(.15)';
+    } else if (type === 'yawn') {
+      mouth.setAttribute('d', 'M46.5 45 Q50 42.5 53.5 45 Q53.5 51.5 50 52.5 Q46.5 51.5 46.5 45 Z');
+      P.squash = -0.12;   // stretches up a touch
+    }
+  }
+
+  function endQuirk() {
+    if (!quirk) return;
+    if (quirk.type === 'wink') eyeR.style.transform = '';
+    if (quirk.type === 'yawn') { const f = P.face; P.face = ''; setFace(f || 'neutral'); }
+    quirk = null;
+    quirkCooldown = (18 + Math.random() * 25) * 60;
+  }
+
+  function eatTreat() {
+    if (!treat) return;
+    treat.el.remove(); treat = null;
+    P.squash = 0.3;
+    setFace('happy');
+    puff('♥'); setTimeout(() => puff('♥'), 170);
+    setTimeout(() => { if (P.face === 'happy') setFace('neutral'); }, 3000);
+  }
+
+  /* --- input. The window only catches clicks while the cursor is on the pet --- */
+  window.addEventListener('mousemove', (e) => {
+    mouse.x = e.clientX; mouse.y = e.clientY; mouse.seen = true;
+    idleTicks = 0;
+    if (drag) return;
+    const d = Math.hypot(mouse.x - P.x, mouse.y - centerY());
+    setIgnore(d > (ignoring ? HIT : HIT + 14));   // hysteresis, so it doesn't flicker
+  }, { passive: true });
+
+  petEl.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    endQuirk();
+    drag = { moved: false, lx: e.clientX, ly: e.clientY, vx: 0, vy: 0 };
+    petEl.classList.add('dragging');
+    petEl.setPointerCapture(e.pointerId);
+    wake();
+  });
+
+  petEl.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.lx, dy = e.clientY - drag.ly;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    drag.vx = dx; drag.vy = dy;
+    drag.lx = e.clientX; drag.ly = e.clientY;
+    P.x = e.clientX;
+    P.targetX = e.clientX;
+    P.dragY = e.clientY;
+    P.rot = Math.max(-24, Math.min(24, dx * 2.2));
+  });
+
+  petEl.addEventListener('pointerup', (e) => {
+    if (!drag) return;
+    const wasDrag = drag.moved;
+    P.vx = Math.max(-9, Math.min(9, drag.vx * 0.75));
+    P.vy = Math.max(-8, Math.min(8, drag.vy * 0.6));
+    P.y = P.dragY - ((ceilCur ?? ceilY()) + P.hang + 46);   // continue the spring from wherever it was released
+    drag = null;
+    petEl.classList.remove('dragging');
+    if (wasDrag) puff('!');
+    else petIt();
+  });
+
+  window.pet.onCommand((command) => {
+    if (command === 'treat') dropTreat();
+    else if (command === 'nap') sleep();
+    else if (command === 'wake') wake();
+    else if (command === 'recenter') { P.x = P.targetX = window.innerWidth / 2; P.y = 0; wake(); }
+  });
+
+  /* --- blinking --- */
+  (function blink() {
+    setTimeout(() => {
+      if (P.state !== 'sleep') {
+        document.body.classList.add('blink');
+        setTimeout(() => document.body.classList.remove('blink'), 110);
+      }
+      blink();
+    }, 1800 + Math.random() * 4500);
+  })();
+
+  /* --- main loop --- */
+  function tick() {
+    frame++;
+    const W = window.innerWidth;
+
+    const fTarget = floorY(P.x), cTarget = ceilY(P.x);
+    floorCur = floorCur === null ? fTarget : floorCur + (fTarget - floorCur) * 0.08;
+    ceilCur  = ceilCur  === null ? cTarget : ceilCur  + (cTarget - ceilCur)  * 0.08;
+
+    const now = performance.now();
+    if (rainbowUntil > now) {
+      const hue = (now * 0.05) % 360;
+      ghostBody.style.fill = `hsl(${hue}, 45%, 84%)`;        // pastel tint, stays "white-ish"
+    } else if (rainbowUntil !== 0) {
+      ghostBody.style.fill = '';                             // done — back to plain white
+      rainbowUntil = 0;
+      nextRainbowAt = now + 60000 + Math.random() * 90000;   // next one in ~1-2.5 min
+    } else if (now >= nextRainbowAt) {
+      rainbowUntil = now + 3000 + Math.random() * 3000;      // rainbow lasts ~3-6s
+    }
+
+    /* --- gentle drift toward the current target, with springy fling inertia --- */
+    prevX = P.x;
+    if (!drag) {
+      P.vx *= .92; P.x += P.vx;
+      P.x += (P.targetX - P.x) * 0.02;
+      if (!quirk || quirk.type !== 'peek') {   // peeking is allowed to slip past the edge
+        if (P.x < EDGE) { P.x = EDGE; P.targetX = Math.max(P.targetX, EDGE); }
+        if (P.x > W - EDGE) { P.x = W - EDGE; P.targetX = Math.min(P.targetX, W - EDGE); }
+      }
+
+      P.vy += (0 - P.y) * .012;
+      P.vy *= .9;
+      P.y += P.vy;
+    }
+
+    // real per-frame displacement (drift, fling, or drag — whatever actually moved it)
+    const moveVX = P.x - prevX;
+    const shearTarget = Math.max(-22, Math.min(22, -moveVX * 16));
+    hemShearVel += (shearTarget - hemShear) * 0.025;   // soft spring: lags well behind the body
+    hemShearVel *= 0.93;                               // underdamped: sways past center and settles
+    hemShear += hemShearVel;
+
+    // vertical motion puffs the skirt: dropping flares it out, rising tucks it in
+    const cyNow = centerY();
+    const moveVY = cyNow - prevCY;
+    prevCY = cyNow;
+    const flareTarget = Math.max(-4, Math.min(8, moveVY * 2.2));
+    hemFlareVel += (flareTarget - hemFlare) * 0.09;
+    hemFlareVel *= 0.85;
+    hemFlare += hemFlareVel;
+
+    P.squash *= .9;
+
+    /* --- hang depth: floats near the top, droops asleep, hides above the edge,
+           or swoops all the way down to grab a treat off the floor --- */
+    const dropDepth = (floorCur ?? fTarget) - (ceilCur ?? cTarget) - 74;   // reaches just above the floor
+    const hangTarget =
+      (quirk && quirk.type === 'hide') ? (quirk.frames > 130 ? -112 : HANG)
+      : P.state === 'sleep' ? SLEEP_HANG
+      : (treat && Math.abs(treat.x - P.x) < 70) ? dropDepth
+      : HANG;
+    P.hang += (hangTarget - P.hang) * .04;
+
+    if (!drag && P.state !== 'sleep') {
+      if (treat) {
+        floatTo(treat.x);
+        if (Math.abs(treat.x - P.x) < 16 && P.hang > dropDepth - 16) eatTreat();
+      } else if (--P.nextWander <= 0) {
+        // tags along with the cursor but always parks off to one side, never on it
+        const wander = (mouse.seen && Math.random() < .5)
+          ? mouse.x + (Math.random() < .5 ? -1 : 1) * (150 + Math.random() * 150)
+          : P.x + (Math.random() * 340 - 170);
+        floatTo(wander);
+        P.nextWander = 150 + Math.random() * 320;
+      }
+
+      // personal space: if the cursor sits on top of it for a couple of seconds
+      // (e.g. you're typing right where it floats), politely drift aside
+      const nearD = Math.hypot(mouse.x - P.x, mouse.y - centerY());
+      nearTicks = (mouse.seen && nearD < 95) ? nearTicks + 1 : 0;
+      if (nearTicks > 150) {
+        floatTo(P.x + (P.x >= mouse.x ? 1 : -1) * (180 + Math.random() * 80));
+        nearTicks = 0;
+      }
+
+      if (!quirk && !treat && --quirkCooldown <= 0) startQuirk();
+    }
+
+    // nod off after ~40s of no cursor movement
+    if (P.state !== 'sleep' && !drag) {
+      idleTicks++;
+      if (idleTicks > 60 * 40 && !treat && !quirk) sleep();
+    } else if (P.state === 'sleep' && frame % 110 === 0) {
+      puff('z z', 'zzz');
+    }
+
+    /* --- ghost quirks: lazy twirl, translucent flicker, peekaboo --- */
+    if (spinFrames > 0) {
+      P.rot = (1 - spinFrames / 70) * 360;
+      spinFrames--;
+      if (spinFrames === 0) spinCooldown = (30 + Math.random() * 60) * 60;
+    } else if (!drag) {
+      P.rot = Math.sin(frame / 70) * 4 - moveVX * 1.8;
+      if (P.state !== 'sleep' && !treat && !quirk && --spinCooldown <= 0) spinFrames = 70;
+    }
+
+    /* --- current cute action --- */
+    if (quirk) {
+      const q = quirk, t = q.total - q.frames;
+      if (q.type === 'peek') {
+        // slide off the edge, hold there peeking, then drift back in
+        const z = zoneAt(q.data.retX);
+        const offX = q.data.side === 'left' ? z.x - EDGE + 18 : z.x + z.width + EDGE - 18;
+        P.targetX = q.frames > 120 ? offX : q.data.retX;
+      } else if (q.type === 'wiggle') {
+        P.rot = Math.sin(t * .55) * 13;
+      } else if (q.type === 'zoomies') {
+        if (t % 40 === 0) P.vx += ((t / 40) % 2 === 0 ? 1 : -1) * 7;
+        setFace(q.frames > 20 ? 'happy' : 'neutral');
+      } else if (q.type === 'yawn' && q.frames === 30) {
+        P.squash = 0.16;   // settles back down after the stretch
+      }
+      if (--q.frames <= 0) endQuirk();
+    }
+
+    if (phaseFrames > 0) {
+      const t = 1 - phaseFrames / 60;
+      bodyEl.style.opacity = 0.3 + 0.7 * Math.abs(Math.sin(t * Math.PI));
+      phaseFrames--;
+      if (phaseFrames === 0) { bodyEl.style.opacity = ''; phaseCooldown = (35 + Math.random() * 55) * 60; }
+    } else if (P.state !== 'sleep' && --phaseCooldown <= 0) {
+      phaseFrames = 55;
+    }
+
+    if (!drag && P.state !== 'sleep' && mouse.seen && --booCooldown <= 0) {
+      const d = Math.hypot(mouse.x - P.x, mouse.y - centerY());
+      if (d < 100 && d > HIT + 14 && Math.random() < 0.02) {
+        puff('BOO!');
+        P.squash = 0.26;
+        P.vy = Math.max(P.vy, 6);
+        booCooldown = (18 + Math.random() * 25) * 60;
+      }
+    }
+
+    const breath = P.state === 'sleep' ? Math.sin(frame / 46) * .035 : Math.sin(frame / 30) * .016;
+
+    if (P.state !== 'sleep' && mouse.seen) {
+      const ox = Math.max(-2.2, Math.min(2.2, (mouse.x - P.x) / 60));
+      const oy = Math.max(-1.6, Math.min(1.8, (mouse.y - centerY()) / 80));
+      eyeL.setAttribute('cx', 42 + ox); eyeR.setAttribute('cx', 58 + ox);
+      eyeL.setAttribute('cy', 34 + oy); eyeR.setAttribute('cy', 34 + oy);
+    }
+
+    ghostBody.setAttribute('d', ghostPath(frame, hemShear, hemFlare));
+
+    const sy = 1 - P.squash + breath, sx = 1 + P.squash * .8 - breath;
+    petEl.style.transform  = `translate3d(${P.x}px, ${centerY()}px, 0)`;
+    bodyEl.style.transform = `rotate(${P.rot}deg) scale(${sx}, ${sy})`;
+
+    // the shadow only shows when it dives near the floor (e.g. grabbing a treat)
+    const nearFloor = Math.max(0, 1 - ((floorCur ?? fTarget) - centerY() - 46) / 160);
+    shadow.style.transform = `translate3d(${P.x}px, ${(floorCur ?? fTarget) - 4}px, 0) scale(${.35 + nearFloor * .45})`;
+    shadow.style.opacity   = nearFloor * .22 * (phaseFrames > 0 ? 0.5 : 1);
+
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  window.addEventListener('resize', () => {
+    P.x = P.targetX = Math.min(P.x, window.innerWidth - EDGE);
+  });
+})();
+</script>
+</body>
+</html>

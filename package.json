@@ -1,0 +1,24 @@
+{
+  "name": "desk-pet",
+  "productName": "Desk Pet",
+  "version": "1.0.0",
+  "description": "A small companion that hops along the bottom of your screen while you work.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.local.deskpet",
+    "files": ["main.js", "preload.js", "renderer/**", "assets/**"],
+    "mac": { "icon": "assets/icon.png", "category": "public.app-category.entertainment" },
+    "win": { "icon": "assets/icon.png", "target": "portable" },
+    "linux": { "icon": "assets/icon.png", "target": "AppImage" }
+  }
+}
