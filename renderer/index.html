@@ -127,7 +127,7 @@
   let hemFlare = 0, hemFlareVel = 0, prevCY = 0;
   let spinFrames = 0;
   let spinCooldown = (25 + Math.random() * 40) * 60;      // occasional lazy twirl
-  let phaseFrames = 0;
+  let phaseFrames = 0, phaseJitter = 1;
   let phaseCooldown = (35 + Math.random() * 55) * 60;     // occasional translucent flicker
   let booCooldown = (15 + Math.random() * 20) * 60;       // peekaboo when the cursor lingers nearby
   let quirk = null;                                       // current cute action, if any
@@ -476,12 +476,18 @@
     }
 
     if (phaseFrames > 0) {
-      const t = 1 - phaseFrames / 60;
-      bodyEl.style.opacity = 0.3 + 0.7 * Math.abs(Math.sin(t * Math.PI));
+      // ghostly flicker: an eased dip to translucent, with erratic snaps between
+      // opacity levels on top — like an apparition struggling to stay visible
+      const t = 1 - phaseFrames / 80;
+      const dip = 1 - 0.8 * Math.sin(t * Math.PI);          // fades to ~0.2 mid-flicker and back
+      if (phaseFrames % 3 === 0) {
+        phaseJitter = Math.random() < 0.4 ? 0.25 + Math.random() * 0.5 : 1;
+      }
+      bodyEl.style.opacity = Math.max(0.1, Math.min(1, dip * phaseJitter)).toFixed(3);
       phaseFrames--;
-      if (phaseFrames === 0) { bodyEl.style.opacity = ''; phaseCooldown = (35 + Math.random() * 55) * 60; }
+      if (phaseFrames === 0) { bodyEl.style.opacity = ''; phaseJitter = 1; phaseCooldown = (35 + Math.random() * 55) * 60; }
     } else if (P.state !== 'sleep' && --phaseCooldown <= 0) {
-      phaseFrames = 55;
+      phaseFrames = 80;
     }
 
     if (!drag && P.state !== 'sleep' && mouse.seen && --booCooldown <= 0) {
