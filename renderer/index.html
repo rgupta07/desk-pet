@@ -32,7 +32,7 @@
   body.asleep #ghostBody { transform: scale(.92); }
   .eye { transform-origin: center; transition: transform .08s ease; }
   body.blink .eye { transform: scaleY(.12); }
-  body.asleep .eye { transform: scaleY(.15); }
+  body.asleep .eye { transform: translateY(-3px) scaleY(.15); }
   #mouth { transition: d .25s ease; }
 
   #shadow {
@@ -219,6 +219,8 @@
     if (P.state === 'sleep') return;
     P.state = 'sleep';
     document.body.classList.add('asleep');
+    eyeL.setAttribute('cx', 42); eyeL.setAttribute('cy', 34);
+    eyeR.setAttribute('cx', 58); eyeR.setAttribute('cy', 34);
     setFace('sleep');
     window.pet.reportState('sleep');
   }
