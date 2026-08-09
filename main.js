@@ -86,7 +86,7 @@ function buildTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'trayTemplate.png'));
   if (isMac) icon.setTemplateImage(true);
   tray = new Tray(icon);
-  tray.setToolTip('Your desk pet');
+  tray.setToolTip('Boo!');
   refreshTrayMenu();
 }
 
